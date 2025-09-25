@@ -9,24 +9,22 @@ import createSalesRouter from "./sales.js";
 const { Pool } = pkg;
 dotenv.config();
 
-const app = express();
-
-// ===================== AJUSTE CRUCIAL: Configuración de CORS para producción y desarrollo =====================
 const allowedOrigins = [
-  'http://localhost:5173', // Para desarrollo local del frontend
-  'https://pos-sales-yo.vercel.app' // Dominio de tu frontend en producción
+  'http://localhost:5173', // Para desarrollo local del frontend
+  'https://front-pos-khaki.vercel.app', // Dominio de tu frontend en producción (ajustado)
+  'https://pos-sales-74qzidk8n-joselinemtzs-projects.vercel.app' // Dominio de tu backend en producción
 ];
 
 const corsOptions = {
-  origin: function (origin, callback) {
-    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
-      callback(null, true);
-    } else {
-      callback(new Error('No permitido por CORS'));
-    }
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: function (origin, callback) {
+    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
 app.use(cors(corsOptions));
