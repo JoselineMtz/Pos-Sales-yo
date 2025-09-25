@@ -6,13 +6,18 @@ import jwt from "jsonwebtoken";
 import createStockRouter from "./stockRoutes.js";
 import createSalesRouter from "./sales.js";
 
+
 const { Pool } = pkg;
 dotenv.config();
 
+// 🚀 CREAR LA INSTANCIA DE EXPRESS PRIMERO
+const app = express(); 
+
+// 👇 AHORA SÍ, CONFIGURAR LOS MIDDLEWARES
 const allowedOrigins = [
-  'http://localhost:5173', // Para desarrollo local del frontend
-  'https://front-pos-khaki.vercel.app', // Dominio de tu frontend en producción (ajustado)
-  'https://pos-sales-74qzidk8n-joselinemtzs-projects.vercel.app' // Dominio de tu backend en producción
+  'http://localhost:5173', 
+  'https://front-pos-khaki.vercel.app', 
+  'https://pos-sales-8p1pdsld5-joselinemtzs-projects.vercel.app' 
 ];
 
 const corsOptions = {
@@ -29,6 +34,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+
 
 // 🔍 Logging de requests
 app.use((req, res, next) => {
