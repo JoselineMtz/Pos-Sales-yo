@@ -2,19 +2,17 @@
   "name": "pos-supabase",
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
   "scripts": {
     "dev": "node server.js",
-    "start": "node server.js",
-    "build": "echo 'No build step required'"
+    "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "@supabase/supabase-js": "^2.38.0",
-    "jsonwebtoken": "^9.0.2",
-    "cors": "^2.8.5"
+    "@supabase/supabase-js": "^2.58.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   }
 }
