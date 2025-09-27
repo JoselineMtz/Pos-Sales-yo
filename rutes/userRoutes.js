@@ -1,6 +1,6 @@
 // userRoutes.js
 import express from 'express';
-import { db } from './server.js'; // Importa la conexión a la BD
+import { db } from '../server.js'; // Importa la conexión a la BD
 
 const router = express.Router();
 
