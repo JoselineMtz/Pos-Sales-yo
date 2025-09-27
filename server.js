@@ -1,363 +1,400 @@
-import express from "express";
-import pkg from 'pg';
-import cors from "cors";
-import dotenv from "dotenv";
-import jwt from "jsonwebtoken";
-// Importar routers externos (asegúrate de que existan)
-import createStockRouter from "./stockRoutes.js";
-import createSalesRouter from "./sales.js";
-
-const { Pool } = pkg;
-dotenv.config();
+import express from 'express';
+import jwt from 'jsonwebtoken';
+import cors from 'cors';
 
 const app = express();
-app.use(cors());
+
+// Middleware CORS para Vercel + desarrollo
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://front-pos-khaki.vercel.app',
+  'https://tu-frontend.vercel.app' // Reemplaza con tu dominio real
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
 app.use(express.json());
 
-// 🔍 Logging de requests (del segundo archivo)
-app.use((req, res, next) => {
-    console.log(`🔍 [${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
-    next();
-});
+// Manejar preflight requests
+app.options('*', cors());
 
-// ===================== CONEXIÓN POSTGRESQL (del segundo archivo) =====================
-const pool = new Pool({
-    host: process.env.DB_HOST || "localhost",
-    user: process.env.DB_USER || "postgres",
-    password: process.env.DB_PASSWORD || "peluche1",
-    database: process.env.DB_NAME || "ventas_bd",
-    port: process.env.DB_PORT || 5433,
-});
+// Configuración segura de Supabase
+let supabase = null;
+try {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  
+  if (supabaseUrl && supabaseKey && supabaseUrl.startsWith('https://')) {
+    const { createClient } = await import('@supabase/supabase-js');
+    supabase = createClient(supabaseUrl, supabaseKey);
+    console.log('✅ Supabase configurado correctamente');
+  } else {
+    console.log('⚠️  Supabase no configurado - Modo simulación activado');
+  }
+} catch (error) {
+  console.log('⚠️  Error cargando Supabase:', error.message);
+}
 
-// Verificar conexión a PostgreSQL
-pool.on('connect', () => {
-    console.log("✅ Conectado a PostgreSQL");
-});
-
-pool.on('error', (err) => {
-    console.error("❌ Error de conexión PostgreSQL:", err);
-});
-
-// Función helper para ejecutar queries
-const db = {
-    query: (text, params) => pool.query(text, params),
-};
-
-// ===================== MIDDLEWARE JWT (del segundo archivo) =====================
+// ===================== MIDDLEWARE JWT =====================
 function verificarToken(req, res, next) {
-    const authHeader = req.headers["authorization"];
+  const authHeader = req.headers["authorization"];
 
-    if (!authHeader) {
-        return res.status(401).json({ message: "Token no proporcionado" });
+  if (!authHeader) {
+    return res.status(401).json({ message: "Token no proporcionado" });
+  }
+
+  const parts = authHeader.split(" ");
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    return res.status(401).json({ message: "Formato de token inválido. Use: Bearer <token>" });
+  }
+
+  const token = parts[1];
+
+  if (!token) {
+    return res.status(401).json({ message: "Token no proporcionado" });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET || "clave_secreta", (err, user) => {
+    if (err) {
+      console.log("❌ ERROR al verificar token:", err.message);
+      return res.status(403).json({ message: "Token inválido o expirado" });
     }
-
-    const parts = authHeader.split(" ");
-    if (parts.length !== 2 || parts[0] !== "Bearer") {
-        return res.status(401).json({ message: "Formato de token inválido. Use: Bearer <token>" });
-    }
-
-    const token = parts[1];
-
-    if (!token) {
-        return res.status(401).json({ message: "Token no proporcionado" });
-    }
-
-    jwt.verify(token, process.env.JWT_SECRET || "clave_secreta", (err, user) => {
-        if (err) {
-            console.log("❌ ERROR al verificar token:", err.message);
-            return res.status(403).json({ message: "Token inválido o expirado" });
-        }
-        console.log("✅ Token verificado. Usuario:", user);
-        req.user = user;
-        next();
-    });
+    console.log("✅ Token verificado. Usuario:", user);
+    req.user = user;
+    next();
+  });
 }
 
-// ===================== ENRUTADOR PRINCIPAL DE LA API =====================
-const apiRouter = express.Router();
+// ===================== RUTAS PRINCIPALES =====================
 
-// Health check (una combinación del check de ambos archivos)
+// Health check
 app.get('/', (req, res) => {
-    res.json({ 
-        message: '✅ API POS funcionando',
-        status: 'OK',
-        database: process.env.DB_NAME ? 'PostgreSQL Conectado' : 'Configuración Pendiente',
-        timestamp: new Date().toISOString()
-    });
+  res.json({ 
+    message: '✅ API POS funcionando',
+    status: 'OK',
+    database: supabase ? 'Supabase Conectado' : 'Modo Simulación',
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Ruta estática del segundo archivo
-apiRouter.get("/health", (req, res) => {
-    res.json({
-        message: "Servidor funcionando correctamente",
-        timestamp: new Date().toISOString(),
-        database: process.env.DB_NAME || "ventas_bd",
-    });
+// Health check de API
+app.get('/api/health', (req, res) => {
+  res.json({
+    message: "Servidor funcionando correctamente",
+    timestamp: new Date().toISOString(),
+    database: supabase ? 'Conectado' : 'Simulación',
+  });
 });
 
+// ===================== RUTA DE LOGIN =====================
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
 
-// ===================== RUTA DE LOGIN (Modificada para ser Híbrida) =====================
-const SIMULATION_MODE = !process.env.DB_HOST || !process.env.DB_USER; // Puedes ajustar esta lógica
-if (SIMULATION_MODE) {
-    console.log('⚠️  Modo simulación activado para el Login (Sin DB Configurada)');
-}
+    if (!username || !password) {
+      return res.status(400).json({ message: "Usuario y contraseña requeridos" });
+    }
 
-apiRouter.post('/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-
-        if (!username || !password) {
-            return res.status(400).json({ message: "Usuario y contraseña requeridos" });
-        }
-
-        // Modo simulación (del primer archivo)
-        if (SIMULATION_MODE) {
-            if (username === 'admin' && password === '123456') {
-                const token = jwt.sign(
-                    { id: 1, username: 'admin', rol: 'admin' },
-                    process.env.JWT_SECRET || "clave_secreta",
-                    { expiresIn: "8h" }
-                );
-                
-                return res.json({
-                    message: "Login exitoso (modo simulación)",
-                    token,
-                    user: { id: 1, username: 'admin', rol: 'admin' }
-                });
-            } else {
-                return res.status(401).json({ message: "Credenciales incorrectas" });
-            }
-        }
-
-        // Modo real con PostgreSQL (del segundo archivo)
-        const result = await db.query(
-            "SELECT id, username, nombre, rol, password FROM usuarios WHERE username = $1 AND password = $2",
-            [username, password]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(401).json({ message: "Usuario o contraseña incorrectos" });
-        }
-
-        const user = result.rows[0];
+    // Modo simulación si Supabase no está configurado
+    if (!supabase) {
+      if (username === 'admin' && password === '123456') {
         const token = jwt.sign(
-            { id: user.id, username: user.username, rol: user.rol },
-            process.env.JWT_SECRET || "clave_secreta",
-            { expiresIn: "8h" }
+          { id: 1, username: 'admin', rol: 'admin' },
+          process.env.JWT_SECRET || "clave_secreta",
+          { expiresIn: "8h" }
         );
-
-        res.json({
-            message: "Login exitoso",
-            token,
-            user: { id: user.id, username: user.username, rol: user.rol, nombre: user.nombre }
+        
+        return res.json({
+          message: "Login exitoso (modo simulación)",
+          token,
+          user: { id: 1, username: 'admin', nombre: 'Administrador', rol: 'admin' }
         });
-
-    } catch (error) {
-        console.error('Error en login:', error);
-        res.status(500).json({ message: "Error interno del servidor" });
+      } else {
+        return res.status(401).json({ message: "Credenciales incorrectas" });
+      }
     }
+
+    // Modo real con Supabase
+    const { data: usuarios, error } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('username', username)
+      .eq('password', password);
+
+    if (error) {
+      console.error('Error Supabase:', error);
+      return res.status(500).json({ message: "Error en la base de datos" });
+    }
+
+    if (!usuarios || usuarios.length === 0) {
+      return res.status(401).json({ message: "Credenciales incorrectas" });
+    }
+
+    const user = usuarios[0];
+    const token = jwt.sign(
+      { id: user.id, username: user.username, rol: user.rol },
+      process.env.JWT_SECRET || "clave_secreta",
+      { expiresIn: "8h" }
+    );
+
+    res.json({
+      message: "Login exitoso",
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        nombre: user.nombre,
+        rol: user.rol
+      }
+    });
+
+  } catch (error) {
+    console.error('Error en login:', error);
+    res.status(500).json({ message: "Error interno del servidor" });
+  }
 });
 
-
-// ===================== CONFIGURACIÓN DE ROUTERS (del segundo archivo) =====================
-console.log("🔍 Configurando routers...");
-
-// Stock router (solo necesita consultas simples)
-const stockRouter = createStockRouter(db);
-apiRouter.use("/stock", verificarToken, stockRouter);
-
-// Sales router (necesita transacciones - pasa el pool)
-const salesRouter = createSalesRouter(pool);
-apiRouter.use("/sales", verificarToken, salesRouter);
-
-
-// ===================== RUTAS DE PERMISOS (del segundo archivo) =====================
-apiRouter.get("/permissions/:employeeId", verificarToken, async (req, res) => {
-    console.log("🔹 Usuario intentando obtener permisos:", req.user);
-
-    if (req.user.rol !== "admin") {
-        return res.status(403).json({ message: "Solo los administradores pueden ver permisos" });
+// ===================== RUTAS DE PRODUCTOS =====================
+app.get('/api/productos', verificarToken, async (req, res) => {
+  try {
+    // Modo simulación
+    if (!supabase) {
+      return res.json([
+        { id: 1, nombre: "Producto Demo 1", precio: 10.99, stock: 100, codigo: "PROD001" },
+        { id: 2, nombre: "Producto Demo 2", precio: 15.50, stock: 50, codigo: "PROD002" },
+        { id: 3, nombre: "Producto Demo 3", precio: 8.75, stock: 200, codigo: "PROD003" }
+      ]);
     }
 
-    const { employeeId } = req.params;
+    // Modo real con Supabase
+    const { data: productos, error } = await supabase
+      .from('productos')
+      .select('*')
+      .order('nombre');
 
-    try {
-        const result = await db.query(
-            "SELECT permissions FROM user_permissions WHERE user_id = $1",
-            [employeeId]
-        );
+    if (error) throw error;
 
-        if (result.rows.length === 0) {
-            const defaultPermissions = {
-                can_view_products: true,
-                can_edit_products: false,
-                can_delete_products: false,
-                can_create_products: false,
-                can_view_sales: true,
-                can_create_sales: true,
-                can_view_customers: true,
-                can_edit_customers: false,
-                can_view_reports: false,
-                can_manage_stock: false
-            };
-            return res.json({ permissions: defaultPermissions });
-        }
-
-        // Nota: Asumiendo que `permissions` es de tipo JSONB en tu DB.
-        res.json({ permissions: result.rows[0].permissions });
-    } catch (error) {
-        console.error("Error al obtener permisos:", error);
-        res.status(500).json({ error: "Error interno del servidor" });
-    }
+    res.json(productos || []);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-apiRouter.post("/permissions", verificarToken, async (req, res) => {
-    console.log("🔹 Usuario intentando guardar permisos:", req.user);
-
-    if (req.user.rol !== "admin") {
-        return res.status(403).json({ message: "Solo los administradores pueden modificar permisos" });
+// ===================== RUTAS DE CLIENTES =====================
+app.get('/api/clientes', verificarToken, async (req, res) => {
+  try {
+    // Modo simulación
+    if (!supabase) {
+      return res.json([
+        { id: 1, nombre: "Cliente Demo 1", telefono: "123456789", saldo_pendiente: 0 },
+        { id: 2, nombre: "Cliente Demo 2", telefono: "987654321", saldo_pendiente: 150.75 }
+      ]);
     }
 
-    const { employee_id, permissions } = req.body;
+    // Modo real con Supabase
+    const { data: clientes, error } = await supabase
+      .from('clientes')
+      .select('*')
+      .order('nombre');
 
-    if (!employee_id || !permissions) {
-        return res.status(400).json({ message: "Datos incompletos" });
-    }
+    if (error) throw error;
 
-    try {
-        const query = `
-      INSERT INTO user_permissions (user_id, permissions)
-      VALUES ($1, $2)
-      ON CONFLICT (user_id)
-      DO UPDATE SET permissions = $2
-    `;
-
-        await db.query(query, [employee_id, permissions]);
-        res.json({ message: "Permisos guardados correctamente" });
-    } catch (error) {
-        console.error("Error al guardar permisos:", error);
-        res.status(500).json({ error: "Error interno del servidor" });
-    }
+    res.json(clientes || []);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener clientes" });
+  }
 });
 
-// ===================== RUTAS DE CLIENTES (del segundo archivo) =====================
-apiRouter.get("/clientes", verificarToken, async (req, res) => {
-    try {
-        const result = await db.query("SELECT * FROM clientes ORDER BY nombre");
-        res.json(result.rows);
-    } catch (error) {
-        res.status(500).json({ error: "Error al obtener clientes" });
+// Clientes con deuda
+app.get('/api/clientes/con-deuda', verificarToken, async (req, res) => {
+  try {
+    // Modo simulación
+    if (!supabase) {
+      return res.json([
+        { id: 2, nombre: "Cliente Demo 2", telefono: "987654321", saldo_pendiente: 150.75 }
+      ]);
     }
+
+    // Modo real con Supabase
+    const { data: clientes, error } = await supabase
+      .from('clientes')
+      .select('id, nombre, telefono, saldo_pendiente')
+      .gt('saldo_pendiente', 0)
+      .order('nombre');
+
+    if (error) throw error;
+
+    res.json(clientes || []);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener clientes con deuda" });
+  }
 });
 
-apiRouter.get("/clientes/con-deuda", verificarToken, async (req, res) => {
-    console.log("🔍 SOLICITUD RECIBIDA: Obtener clientes con deuda");
-    try {
-        const query = `
-            SELECT id, nombre, rut, telefono, saldo_pendiente
-            FROM clientes
-            WHERE saldo_pendiente > 0
-            ORDER BY nombre ASC
-        `;
-        const result = await db.query(query);
+// Crear cliente
+app.post('/api/clientes', verificarToken, async (req, res) => {
+  const { rut, nombre, telefono, email, direccion } = req.body;
 
-        console.log(`✅ ${result.rows.length} clientes con deuda encontrados.`);
-        res.json(result.rows);
-    } catch (error) {
-        console.error("❌ ERROR al obtener clientes con deuda:", error);
-        res.status(500).json({
-            error: "No se puede mostrar clientes con deuda",
-            message: error.message
-        });
+  if (!nombre || !telefono) {
+    return res.status(400).json({ message: "Nombre y teléfono son obligatorios" });
+  }
+
+  try {
+    // Modo simulación
+    if (!supabase) {
+      const nuevoCliente = {
+        id: Math.random(),
+        nombre,
+        telefono,
+        email,
+        direccion,
+        saldo_pendiente: 0,
+        created_at: new Date().toISOString()
+      };
+      return res.status(201).json({
+        ...nuevoCliente,
+        message: "Cliente creado exitosamente (simulación)"
+      });
     }
+
+    // Modo real con Supabase
+    const { data: cliente, error } = await supabase
+      .from('clientes')
+      .insert([{ 
+        rut: rut?.trim(), 
+        nombre, 
+        telefono, 
+        email, 
+        direccion,
+        saldo_pendiente: 0 
+      }])
+      .select();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(400).json({ error: "El RUT ya está registrado" });
+      }
+      throw error;
+    }
+
+    res.status(201).json({
+      ...cliente[0],
+      message: "Cliente creado exitosamente"
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Error al crear cliente" });
+  }
 });
 
-apiRouter.post("/clientes", verificarToken, async (req, res) => {
-    const { rut, nombre, telefono, email, direccion } = req.body;
+// ===================== RUTAS DE USUARIOS =====================
+app.get('/api/usuarios', verificarToken, async (req, res) => {
+  if (req.user.rol !== "admin") {
+    return res.status(403).json({ message: "Solo los administradores pueden ver usuarios" });
+  }
 
-    if (!nombre || !telefono) {
-        return res.status(400).json({ message: "Nombre y teléfono son obligatorios" });
+  try {
+    // Modo simulación
+    if (!supabase) {
+      return res.json([
+        { id: 1, username: 'admin', nombre: 'Administrador', rol: 'admin' }
+      ]);
     }
 
-    try {
-        let query, params;
+    // Modo real con Supabase
+    const { data: usuarios, error } = await supabase
+      .from('usuarios')
+      .select('id, username, nombre, rol');
 
-        if (rut?.trim()) {
-            query = `INSERT INTO clientes (rut, nombre, telefono, email, direccion, saldo_pendiente) VALUES ($1, $2, $3, $4, $5, 0) RETURNING *`;
-            params = [rut.trim(), nombre, telefono, email, direccion];
-        } else {
-            query = `INSERT INTO clientes (nombre, telefono, email, direccion, saldo_pendiente) VALUES ($1, $2, $3, $4, 0) RETURNING *`;
-            params = [nombre, telefono, email, direccion];
-        }
+    if (error) throw error;
 
-        const result = await db.query(query, params);
-        res.status(201).json({
-            ...result.rows[0],
-            message: "Cliente creado exitosamente"
-        });
-    } catch (error) {
-        if (error.code === '23505') {
-            return res.status(400).json({ error: "El RUT ya está registrado" });
-        }
-        res.status(500).json({ error: "Error al crear cliente" });
-    }
-});
-
-// ===================== RUTAS DE USUARIOS (del segundo archivo) =====================
-apiRouter.get("/usuarios", verificarToken, async (req, res) => {
-    if (req.user.rol !== "admin") {
-        return res.status(403).json({ message: "Solo los administradores pueden ver usuarios" });
-    }
-
-    try {
-        const result = await db.query("SELECT id, username, nombre, rol FROM usuarios");
-        res.json(result.rows);
-    } catch (error) {
-        res.status(500).json({ error: "Error interno del servidor" });
-    }
-});
-
-apiRouter.post("/usuarios", verificarToken, async (req, res) => {
-    if (req.user.rol !== "admin") {
-        return res.status(403).json({ message: "Solo los administradores pueden crear usuarios" });
-    }
-
-    const { username, nombre, password, rol } = req.body;
-    if (!username || !nombre || !password || !rol) {
-        return res.status(400).json({ message: "Faltan datos" });
-    }
-
-    try {
-        const result = await db.query(
-            "INSERT INTO usuarios (username, nombre, password, rol) VALUES ($1, $2, $3, $4) RETURNING id, username, nombre, rol",
-            [username, nombre, password, rol]
-        );
-        res.json(result.rows[0]);
-    } catch (error) {
-        res.status(500).json({ error: "Error interno del servidor" });
-    }
-});
-
-
-// ===================== MONTAJE DEL ROUTER =====================
-app.use("/api", apiRouter);
-
-// ===================== ERRORES (del segundo archivo) =====================
-app.use((err, req, res, next) => {
-    console.error("❌ Error global:", err);
+    res.json(usuarios || []);
+  } catch (error) {
     res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
+// ===================== RUTAS DE VENTAS =====================
+app.post('/api/ventas', verificarToken, async (req, res) => {
+  try {
+    const { cliente_id, productos, total } = req.body;
+
+    // Modo simulación
+    if (!supabase) {
+      return res.json({ 
+        message: "Venta registrada exitosamente (simulación)",
+        venta_id: Math.random() 
+      });
+    }
+
+    // Modo real con Supabase
+    const { data: venta, error: errorVenta } = await supabase
+      .from('ventas')
+      .insert([{ cliente_id, total }])
+      .select();
+
+    if (errorVenta) throw errorVenta;
+
+    // Crear detalles de venta
+    const detalles = productos.map(p => ({
+      venta_id: venta[0].id,
+      producto_id: p.id,
+      cantidad: p.cantidad,
+      precio_unitario: p.precio
+    }));
+
+    const { error: errorDetalles } = await supabase
+      .from('detalles_venta')
+      .insert(detalles);
+
+    if (errorDetalles) throw errorDetalles;
+
+    res.json({ 
+      message: "Venta registrada exitosamente",
+      venta_id: venta[0].id 
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===================== RUTA DE PRUEBA =====================
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    message: "✅ API funcionando correctamente",
+    mode: supabase ? "Supabase Real" : "Modo Simulación",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ===================== MANEJO DE ERRORES =====================
+app.use((err, req, res, next) => {
+  console.error("❌ Error global:", err);
+  res.status(500).json({ error: "Error interno del servidor" });
 });
 
 app.use((req, res) => {
-    res.status(404).json({ error: "Ruta no encontrada" });
+  res.status(404).json({ error: "Ruta no encontrada" });
 });
 
 // ===================== INICIAR SERVIDOR =====================
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
     console.log(`🚀 Servidor en ejecución en http://localhost:${PORT}`);
-    console.log(`🔍 JWT_SECRET: ${process.env.JWT_SECRET || "clave_secreta"}`);
-    console.log(`🗄️  Base de datos: ${SIMULATION_MODE ? 'MODO SIMULACIÓN' : process.env.DB_NAME || "ventas_bd"}`);
-});
+    console.log(`🌐 Modo: ${supabase ? 'Supabase Conectado' : 'Simulación'}`);
+  });
+}
 
 export default app;
