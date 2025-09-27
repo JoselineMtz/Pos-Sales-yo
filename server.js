@@ -46,7 +46,7 @@ app.post('/api/login', async (req, res) => {
 
     // Modo simulación si Supabase no está configurado
     if (!supabase) {
-      if (username === 'admin' && password === 'admin') {
+      if (username === 'admin' && password === '123456') {
         const token = jwt.sign(
           { id: 1, username: 'admin', rol: 'admin' },
           process.env.JWT_SECRET || "clave_secreta",
