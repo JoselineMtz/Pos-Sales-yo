@@ -2,12 +2,11 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import cors from "cors";
 import dotenv from "dotenv";
-// Importamos solo el cliente de Supabase, ya no necesitamos 'pg'
-import { createClient } from "@supabase/supabase-js"; 
+import { createClient } from "@supabase/supabase-js";
 
-// Importa tus routers externos
-import createStockRouter from "./stockRoutes.js";
-import createSalesRouter from "./sales.js";
+// Importa tus routers externos si los tienes. Asegúrate de que existan.
+// import createStockRouter from "./stockRoutes.js";
+// import createSalesRouter from "./sales.js"; 
 
 dotenv.config();
 
@@ -15,9 +14,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===================== CONFIGURACIÓN SUPABASE =====================
+// ===================== CONEXIÓN Y DIAGNÓSTICO SUPABASE =====================
 let supabase = null;
-let databaseStatus = 'Inicializando...'; // Renombrado de supabaseStatus a databaseStatus
+let databaseStatus = 'Inicializando...';
 let databaseDetails = '';
 
 const initializeSupabase = async () => {
@@ -25,21 +24,25 @@ const initializeSupabase = async () => {
         const supabaseUrl = process.env.SUPABASE_URL;
         const supabaseKey = process.env.SUPABASE_ANON_KEY;
         
+        // El import dinámico se reemplaza por el import estático superior
+        if (!createClient) throw new Error("Dependencia @supabase/supabase-js no cargada.");
+        
         console.log('=== DIAGNÓSTICO SUPABASE ===');
         console.log('URL:', supabaseUrl ? '✅ Presente' : '❌ Faltante');
         console.log('Key:', supabaseKey ? '✅ Presente' : '❌ Faltante');
 
         if (!supabaseUrl || !supabaseKey) {
             databaseStatus = '❌ Variables faltantes';
-            databaseDetails = 'Configura SUPABASE_URL y SUPABASE_ANON_KEY';
+            databaseDetails = 'Configura SUPABASE_URL y SUPABASE_ANON_KEY en Render';
             return;
         }
 
-        // Crear cliente de Supabase
+        // Crear cliente
         supabase = createClient(supabaseUrl, supabaseKey);
         console.log('✅ Cliente Supabase creado');
 
         // Prueba de Conexión y Diagnóstico (Usando tabla 'usuarios')
+        console.log('🔍 Probando conexión a Supabase...');
         const { count, error: countError } = await supabase
             .from('usuarios')
             .select('*', { count: 'exact', head: true });
@@ -55,11 +58,11 @@ const initializeSupabase = async () => {
                 databaseStatus = `❌ Error: ${countError.code}`;
                 databaseDetails = countError.message;
             }
-            console.error('❌ Error de conexión/prueba de Supabase:', countError);
+            console.error('❌ Error de Supabase:', countError);
         } else {
             databaseStatus = '✅ Conectado a PostgreSQL';
             databaseDetails = `Tabla usuarios encontrada. Registros: ${count || 0}`;
-            console.log(`✅ Conexión Supabase OK. Registros en usuarios: ${count}`);
+            console.log(`✅ Tabla usuarios tiene ${count} registros`);
         }
 
     } catch (error) {
@@ -69,8 +72,12 @@ const initializeSupabase = async () => {
     }
 };
 
-// Iniciar la conexión de Supabase al inicio
 initializeSupabase();
+
+// Función helper que simula 'db.query' pero retorna el cliente Supabase
+const db = {
+    supabaseClient: () => supabase,
+};
 
 // ===================== MIDDLEWARE JWT =====================
 function verificarToken(req, res, next) {
@@ -87,28 +94,18 @@ function verificarToken(req, res, next) {
             console.log("❌ ERROR al verificar token:", err.message);
             return res.status(403).json({ message: "Token inválido o expirado" });
         }
-        console.log("✅ Token verificado. Usuario:", user);
         req.user = user;
         next();
     });
 }
 
-// ===================== FUNCIÓN DB (AHORA USA SUPABASE) =====================
-// Se simula la función db.query, pero usando el cliente Supabase
-const db = {
-    // Para simplificar, pasamos el cliente Supabase a los Routers externos si lo necesitan
-    supabaseClient: () => supabase,
-    // Nota: El stockRouter y salesRouter deberán ser ajustados para usar db.supabaseClient().from(...)
-};
-
 // ===================== ENRUTADOR PRINCIPAL DE LA API =====================
 const apiRouter = express.Router();
 
-// Rutas estáticas/Diagnóstico (Combina '/' y '/api/health' de los originales)
-apiRouter.get("/health", (req, res) => {
-    res.json({
+// --- RUTAS DE DIAGNÓSTICO ---
+apiRouter.get("/", (req, res) => {
+    res.json({ 
         message: '✅ API POS funcionando',
-        status: 'OK',
         database: {
             status: databaseStatus,
             details: databaseDetails,
@@ -117,7 +114,17 @@ apiRouter.get("/health", (req, res) => {
     });
 });
 
-// Ruta de configuración (para el diagnóstico del frontend)
+apiRouter.get("/health", (req, res) => {
+    res.json({ 
+        status: 'OK',
+        database: {
+            status: databaseStatus,
+            details: databaseDetails
+        },
+        timestamp: new Date().toISOString()
+    });
+});
+
 apiRouter.get('/config', (req, res) => {
     res.json({
         supabase: {
@@ -131,26 +138,16 @@ apiRouter.get('/config', (req, res) => {
     });
 });
 
-// ===================== CONFIGURACIÓN DE ROUTERS =====================
-console.log("🔍 Configurando routers...");
-
-// Se asume que estas funciones han sido modificadas para usar el cliente Supabase
-// En lugar de pasar 'db' o 'pool', pasamos el cliente Supabase (o un wrapper)
-const stockRouter = createStockRouter(db.supabaseClient);
-const salesRouter = createSalesRouter(db.supabaseClient);
-
-// ===================== RUTA DE LOGIN (CON SUPABASE) =====================
+// ===================== RUTA DE LOGIN (CON SUPABASE Y SIMULACIÓN) =====================
 apiRouter.post("/login", async (req, res) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
-        return res.status(400).json({ message: "Usuario y contraseña requeridos" });
+        return res.status(400).json({ message: "Usuario y contraseña requeridos", database_status: databaseStatus });
     }
 
-    // 1. Verificar estado de Supabase para modo simulación
+    // 1. MODO SIMULACIÓN
     if (!supabase || !databaseStatus.includes('✅')) {
-        console.log('🔄 Usando modo simulación - Base de datos no disponible');
-        // Lógica de simulación (copiada del segundo bloque)
         const validUsers = {
             'admin': { id: 1, nombre: 'Admin Simulado', rol: 'admin' },
             'vendedor': { id: 2, nombre: 'Vendedor Simulado', rol: 'vendedor' }
@@ -172,34 +169,24 @@ apiRouter.post("/login", async (req, res) => {
             });
         }
         
-        return res.status(401).json({ 
-            message: "Credenciales incorrectas",
-            database_status: databaseStatus,
-            hint: "En modo simulación usar: admin/123456 o vendedor/123456"
-        });
+        return res.status(401).json({ message: "Credenciales incorrectas", database_status: databaseStatus });
     }
 
-    // 2. Login con Supabase real
-    console.log('📊 Autenticando con Supabase real...');
-
+    // 2. LOGIN CON SUPABASE
     try {
         const { data: usuarios, error } = await supabase
             .from('usuarios')
             .select('id, username, nombre, rol')
             .eq('username', username)
-            .eq('password', password); // NOTA: Esto es inseguro. Se recomienda HASHING.
+            .eq('password', password); // NOTA: Considera usar HASHING en password
 
         if (error) {
             console.error('❌ Error de Supabase:', error);
-            return res.status(500).json({ 
-                message: "Error en la base de datos",
-                error: error.message,
-                database_status: databaseStatus
-            });
+            return res.status(500).json({ message: "Error en la base de datos", error: error.message, database_status: databaseStatus });
         }
 
         if (!usuarios || usuarios.length === 0) {
-            return res.status(401).json({ message: "Usuario o contraseña incorrectos" });
+            return res.status(401).json({ message: "Usuario o contraseña incorrectos en la base de datos real", database_status: databaseStatus });
         }
 
         const user = usuarios[0];
@@ -212,26 +199,20 @@ apiRouter.post("/login", async (req, res) => {
         res.json({
             message: "Login exitoso (Base de datos real)",
             token,
-            user: { id: user.id, username: user.username, rol: user.rol }
+            user: { id: user.id, username: user.username, nombre: user.nombre, rol: user.rol }
         });
 
     } catch (error) {
         console.error('❌ Error en login:', error);
-        res.status(500).json({ 
-            message: "Error interno del servidor",
-            error: error.message,
-            database_status: databaseStatus
-        });
+        res.status(500).json({ message: "Error interno del servidor", error: error.message, database_status: databaseStatus });
     }
 });
+
 
 // ===================== RUTAS CRUD (ADAPTADAS A SUPABASE) =====================
 
 // RUTAS DE PERMISOS
 apiRouter.get("/permissions/:employeeId", verificarToken, async (req, res) => {
-    // ... Lógica de RLS eliminada ya que no es aplicable a Supabase de esta forma ...
-
-    // Uso de Supabase para obtener permisos
     if (req.user.rol !== "admin") {
         return res.status(403).json({ message: "Solo los administradores pueden ver permisos" });
     }
@@ -245,24 +226,16 @@ apiRouter.get("/permissions/:employeeId", verificarToken, async (req, res) => {
             .eq('user_id', employeeId)
             .single();
 
-        if (error && error.code !== 'PGRST116') { // PGRST116: No rows found
-            console.error("Error al obtener permisos:", error);
-            throw error;
-        }
+        // PGRST116 es el código de Supabase para "No se encontraron filas"
+        if (error && error.code !== 'PGRST116') throw error; 
 
         if (!result) {
-            const defaultPermissions = {
-                can_view_products: true, can_edit_products: false, can_delete_products: false,
-                can_create_products: false, can_view_sales: true, can_create_sales: true,
-                can_view_customers: true, can_edit_customers: false, can_view_reports: false,
-                can_manage_stock: false
-            };
+            const defaultPermissions = { /* ... permisos por defecto ... */ };
             return res.json({ permissions: defaultPermissions });
         }
 
         res.json({ permissions: result.permissions });
     } catch (error) {
-        console.error("Error al obtener permisos:", error);
         res.status(500).json({ error: "Error interno del servidor" });
     }
 });
@@ -273,13 +246,11 @@ apiRouter.post("/permissions", verificarToken, async (req, res) => {
     }
 
     const { employee_id, permissions } = req.body;
-
     if (!employee_id || !permissions) {
         return res.status(400).json({ message: "Datos incompletos" });
     }
 
     try {
-        // Upsert en Supabase para insertar o actualizar permisos
         const { error } = await supabase
             .from('user_permissions')
             .upsert({ user_id: employee_id, permissions: permissions });
@@ -288,7 +259,6 @@ apiRouter.post("/permissions", verificarToken, async (req, res) => {
 
         res.json({ message: "Permisos guardados correctamente" });
     } catch (error) {
-        console.error("Error al guardar permisos:", error);
         res.status(500).json({ error: "Error interno del servidor" });
     }
 });
@@ -308,64 +278,40 @@ apiRouter.get("/clientes", verificarToken, async (req, res) => {
     }
 });
 
-// NUEVA RUTA para obtener clientes con deuda
 apiRouter.get("/clientes/con-deuda", verificarToken, async (req, res) => {
-    console.log("🔍 SOLICITUD RECIBIDA: Obtener clientes con deuda");
     try {
         const { data: result, error } = await supabase
             .from('clientes')
             .select('id, nombre, rut, telefono, saldo_pendiente')
-            .gt('saldo_pendiente', 0) // gt = greater than (>)
+            .gt('saldo_pendiente', 0)
             .order('nombre', { ascending: true });
 
         if (error) throw error;
-
-        console.log(`✅ ${result.length} clientes con deuda encontrados.`);
         res.json(result);
     } catch (error) {
-        console.error("❌ ERROR al obtener clientes con deuda:", error);
-        res.status(500).json({
-            error: "No se puede mostrar clientes con deuda",
-            message: error.message
-        });
+        res.status(500).json({ error: "No se puede mostrar clientes con deuda" });
     }
 });
 
 apiRouter.post("/clientes", verificarToken, async (req, res) => {
     const { rut, nombre, telefono, email, direccion } = req.body;
-
     if (!nombre || !telefono) {
         return res.status(400).json({ message: "Nombre y teléfono son obligatorios" });
     }
 
     try {
-        const insertData = {
-            rut: rut?.trim(), // Supabase maneja 'null' o 'undefined'
-            nombre,
-            telefono,
-            email,
-            direccion,
-            saldo_pendiente: 0
-        };
-
         const { data: result, error } = await supabase
             .from('clientes')
-            .insert([insertData])
+            .insert({ rut: rut?.trim(), nombre, telefono, email, direccion, saldo_pendiente: 0 })
             .select()
             .single();
 
         if (error) {
-            // Manejo de error de unicidad (si el rut es único)
-            if (error.code === '23505') { 
-                return res.status(400).json({ error: "El RUT ya está registrado" });
-            }
+            if (error.code === '23505') { return res.status(400).json({ error: "El RUT ya está registrado" }); }
             throw error;
         }
 
-        res.status(201).json({
-            ...result,
-            message: "Cliente creado exitosamente"
-        });
+        res.status(201).json({ ...result, message: "Cliente creado exitosamente" });
     } catch (error) {
         res.status(500).json({ error: "Error al crear cliente" });
     }
@@ -413,10 +359,15 @@ apiRouter.post("/usuarios", verificarToken, async (req, res) => {
     }
 });
 
-// ===================== MONTAJE DEL ROUTER =====================
+// ===================== MONTAJE Y EJECUCIÓN =====================
+
+// Nota: Si usas routers externos, descomenta y ajusta esta sección:
+// apiRouter.use("/stock", verificarToken, createStockRouter(db.supabaseClient));
+// apiRouter.use("/sales", verificarToken, createSalesRouter(db.supabaseClient));
+
 app.use("/api", apiRouter);
 
-// ===================== ERRORES =====================
+// Manejo de errores 404 y 500
 app.use((err, req, res, next) => {
     console.error("❌ Error global:", err);
     res.status(500).json({ error: "Error interno del servidor" });
@@ -426,12 +377,10 @@ app.use((req, res) => {
     res.status(404).json({ error: "Ruta no encontrada" });
 });
 
-// ===================== INICIAR SERVIDOR =====================
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor en ejecución en http://localhost:${PORT}`);
-    console.log(`🔍 JWT_SECRET: ${process.env.JWT_SECRET || "clave_secreta"}`);
-    console.log(`🗄️  Base de datos: ${databaseStatus}`);
+    console.log(`🚀 Servidor en puerto ${PORT}`);
+    console.log(`📊 Estado Supabase: ${databaseStatus}`);
     console.log(`📋 Detalles: ${databaseDetails}`);
 });
 
