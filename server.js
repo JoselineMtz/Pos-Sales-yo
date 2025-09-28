@@ -16,16 +16,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===================== CONEXIÓN SUPABASE =====================
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+// ¡CAMBIO IMPORTANTE! Usa la llave de servicio.
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY; 
 
-if (!supabaseUrl || !supabaseKey) {
-    console.error('❌ Faltan variables de Supabase (URL o ANON_KEY)');
-    process.exit(1);
-}
 const supabase = createClient(supabaseUrl, supabaseKey);
-console.log('✅ Cliente Supabase inicializado');
+console.log('✅ Cliente Supabase inicializado con permisos de servicio');
 
 // ===================== MIDDLEWARE JWT =====================
 function verifyToken(req, res, next) {
