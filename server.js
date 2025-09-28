@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import createStockRouter from "./rutes/stockRoutes.js";
 
-
 dotenv.config();
 
 const app = express();
@@ -22,9 +21,6 @@ const initializeSupabase = async () => {
         const supabaseUrl = process.env.SUPABASE_URL;
         const supabaseKey = process.env.SUPABASE_ANON_KEY;
         
-        // El import dinámico se reemplaza por el import estático superior
-        if (!createClient) throw new Error("Dependencia @supabase/supabase-js no cargada.");
-        
         console.log('=== DIAGNÓSTICO SUPABASE ===');
         console.log('URL:', supabaseUrl ? '✅ Presente' : '❌ Faltante');
         console.log('Key:', supabaseKey ? '✅ Presente' : '❌ Faltante');
@@ -39,7 +35,7 @@ const initializeSupabase = async () => {
         supabase = createClient(supabaseUrl, supabaseKey);
         console.log('✅ Cliente Supabase creado');
 
-        // Prueba de Conexión y Diagnóstico (Usando tabla 'usuarios')
+        // Prueba de Conexión y Diagnóstico
         console.log('🔍 Probando conexión a Supabase...');
         const { count, error: countError } = await supabase
             .from('usuarios')
@@ -70,19 +66,8 @@ const initializeSupabase = async () => {
     }
 };
 
+// Inicializar Supabase
 initializeSupabase();
-
-// Stock router (pasa supabase en lugar de db)
-const stockRouter = createStockRouter(supabase, verificarToken);
-
-// Montar las rutas
-apiRouter.use("/stock", stockRouter);
-
-
-// Función helper que simula 'db.query' pero retorna el cliente Supabase
-const db = {
-    supabaseClient: () => supabase,
-};
 
 // ===================== MIDDLEWARE JWT =====================
 function verificarToken(req, res, next) {
@@ -107,7 +92,13 @@ function verificarToken(req, res, next) {
 // ===================== ENRUTADOR PRINCIPAL DE LA API =====================
 const apiRouter = express.Router();
 
-// --- RUTAS DE DIAGNÓSTICO ---
+// ===================== CONFIGURACIÓN DE ROUTERS =====================
+console.log("🔍 Configurando routers...");
+
+// ✅ Stock router - CORREGIDO: Declarar después de apiRouter
+const stockRouter = createStockRouter(supabase, verificarToken);
+
+// ===================== RUTAS DE DIAGNÓSTICO =====================
 apiRouter.get("/", (req, res) => {
     res.json({ 
         message: '✅ API POS funcionando',
@@ -130,7 +121,7 @@ apiRouter.get("/health", (req, res) => {
     });
 });
 
-apiRouter.get('/config', (req, res) => {
+apiRouter.get("/config", (req, res) => {
     res.json({
         supabase: {
             url: process.env.SUPABASE_URL ? '✅ Configurada' : '❌ No configurada',
@@ -143,7 +134,7 @@ apiRouter.get('/config', (req, res) => {
     });
 });
 
-// ===================== RUTA DE LOGIN (CON SUPABASE Y SIMULACIÓN) =====================
+// ===================== RUTA DE LOGIN =====================
 apiRouter.post("/login", async (req, res) => {
     const { username, password } = req.body;
 
@@ -183,7 +174,7 @@ apiRouter.post("/login", async (req, res) => {
             .from('usuarios')
             .select('id, username, nombre, rol')
             .eq('username', username)
-            .eq('password', password); // NOTA: Considera usar HASHING en password
+            .eq('password', password);
 
         if (error) {
             console.error('❌ Error de Supabase:', error);
@@ -213,8 +204,7 @@ apiRouter.post("/login", async (req, res) => {
     }
 });
 
-
-// ===================== RUTAS CRUD (ADAPTADAS A SUPABASE) =====================
+// ===================== RUTAS CRUD =====================
 
 // RUTAS DE PERMISOS
 apiRouter.get("/permissions/:employeeId", verificarToken, async (req, res) => {
@@ -231,11 +221,21 @@ apiRouter.get("/permissions/:employeeId", verificarToken, async (req, res) => {
             .eq('user_id', employeeId)
             .single();
 
-        // PGRST116 es el código de Supabase para "No se encontraron filas"
         if (error && error.code !== 'PGRST116') throw error; 
 
         if (!result) {
-            const defaultPermissions = { /* ... permisos por defecto ... */ };
+            const defaultPermissions = {
+                can_view_products: true,
+                can_edit_products: false,
+                can_delete_products: false,
+                can_create_products: false,
+                can_view_sales: true,
+                can_create_sales: true,
+                can_view_customers: true,
+                can_edit_customers: false,
+                can_view_reports: false,
+                can_manage_stock: false
+            };
             return res.json({ permissions: defaultPermissions });
         }
 
@@ -277,7 +277,7 @@ apiRouter.get("/clientes", verificarToken, async (req, res) => {
             .order('nombre', { ascending: true });
 
         if (error) throw error;
-        res.json(result);
+        res.json(result || []);
     } catch (error) {
         res.status(500).json({ error: "Error al obtener clientes" });
     }
@@ -292,7 +292,7 @@ apiRouter.get("/clientes/con-deuda", verificarToken, async (req, res) => {
             .order('nombre', { ascending: true });
 
         if (error) throw error;
-        res.json(result);
+        res.json(result || []);
     } catch (error) {
         res.status(500).json({ error: "No se puede mostrar clientes con deuda" });
     }
@@ -307,12 +307,21 @@ apiRouter.post("/clientes", verificarToken, async (req, res) => {
     try {
         const { data: result, error } = await supabase
             .from('clientes')
-            .insert({ rut: rut?.trim(), nombre, telefono, email, direccion, saldo_pendiente: 0 })
+            .insert({ 
+                rut: rut?.trim(), 
+                nombre, 
+                telefono, 
+                email, 
+                direccion, 
+                saldo_pendiente: 0 
+            })
             .select()
             .single();
 
         if (error) {
-            if (error.code === '23505') { return res.status(400).json({ error: "El RUT ya está registrado" }); }
+            if (error.code === '23505') {
+                return res.status(400).json({ error: "El RUT ya está registrado" });
+            }
             throw error;
         }
 
@@ -331,10 +340,11 @@ apiRouter.get("/usuarios", verificarToken, async (req, res) => {
     try {
         const { data: result, error } = await supabase
             .from('usuarios')
-            .select('id, username, nombre, rol');
+            .select('id, username, nombre, rol')
+            .order('nombre');
 
         if (error) throw error;
-        res.json(result);
+        res.json(result || []);
     } catch (error) {
         res.status(500).json({ error: "Error interno del servidor" });
     }
@@ -364,15 +374,15 @@ apiRouter.post("/usuarios", verificarToken, async (req, res) => {
     }
 });
 
-// ===================== MONTAJE Y EJECUCIÓN =====================
+// ===================== MONTAJE DE RUTAS =====================
 
-// Nota: Si usas routers externos, descomenta y ajusta esta sección:
-// apiRouter.use("/stock", verificarToken, createStockRouter(db.supabaseClient));
-// apiRouter.use("/sales", verificarToken, createSalesRouter(db.supabaseClient));
+// ✅ CORREGIDO: Montar stockRouter después de definir apiRouter
+apiRouter.use("/stock", stockRouter);
 
+// Montar el router principal
 app.use("/api", apiRouter);
 
-// Manejo de errores 404 y 500
+// ===================== MANEJO DE ERRORES =====================
 app.use((err, req, res, next) => {
     console.error("❌ Error global:", err);
     res.status(500).json({ error: "Error interno del servidor" });
@@ -382,6 +392,7 @@ app.use((req, res) => {
     res.status(404).json({ error: "Ruta no encontrada" });
 });
 
+// ===================== INICIAR SERVIDOR =====================
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
     console.log(`🚀 Servidor en puerto ${PORT}`);
