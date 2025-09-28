@@ -7,8 +7,8 @@ import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
 // 👇 IMPORTAMOS LOS ROUTERS EXTERNOS
-import createStockRouter from './stockRoutes.js';
-import createSalesRouter from './salesRoutes.js';
+import createStockRouter from './rutes/stockRoutes.js';
+import createSalesRouter from './rutes/sales.js';
 
 dotenv.config();
 
