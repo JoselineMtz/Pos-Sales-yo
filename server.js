@@ -7,21 +7,27 @@ import { createClient } from "@supabase/supabase-js";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// Por seguridad, es mejor limitar CORS a tu dominio de Vercel
+const corsOptions = {
+    origin: process.env.FRONTEND_URL || '*', // Usa una variable de entorno para la URL de tu frontend
+    optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ===================== CONEXIÓN SUPABASE =====================
 const supabaseUrl = process.env.SUPABASE_URL;
-// ¡CAMBIO CLAVE AQUÍ! Usa la llave de servicio en lugar de la anónima
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY; // <--- MODIFICADO
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.error('❌ Faltan variables de Supabase (URL o SERVICE_KEY)'); // <--- MODIFICADO
-  process.exit(1);
+    console.error('❌ Faltan variables de Supabase (URL o ANON_KEY)');
+    process.exit(1);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
-console.log('✅ Cliente Supabase inicializado con permisos de servicio');
+console.log('✅ Cliente Supabase inicializado con llave anónima');
+
 // ===================== MIDDLEWARE JWT =====================
 function verifyToken(req, res, next) {
     const authHeader = req.headers["authorization"];
@@ -41,210 +47,175 @@ function verifyToken(req, res, next) {
     }
 }
 
-// ===================== RUTA DE LOGIN MEJORADA =====================
+// ===================== RUTA DE LOGIN =====================
 app.post("/api/login", async (req, res) => {
     const { username, password } = req.body;
 
-    console.log('🔐 Intento de login:', { username });
-
     if (!username || !password) {
-        return res.status(400).json({ 
-            message: "Usuario y contraseña requeridos" 
-        });
+        return res.status(400).json({ message: "Usuario y contraseña requeridos" });
     }
 
     try {
-        // 1. Buscar usuario en la base de datos
         const { data: usuarios, error } = await supabase
             .from('usuarios')
             .select('id, username, password, nombre, rol')
             .eq('username', username)
-            .eq('password', password);
+            .eq('password', password); // NOTA: Guardar contraseñas en texto plano es muy inseguro.
 
-        if (error) {
-            console.error('❌ Error de Supabase:', error);
-            return res.status(500).json({ 
-                message: "Error en la base de datos",
-                error: error.message 
-            });
-        }
+        if (error) throw error;
 
-        // 2. Verificar si se encontró el usuario
         if (!usuarios || usuarios.length === 0) {
-            console.log('❌ Credenciales incorrectas para usuario:', username);
-            return res.status(401).json({ 
-                message: "Usuario o contraseña incorrectos" 
-            });
+            return res.status(401).json({ message: "Usuario o contraseña incorrectos" });
         }
 
         const user = usuarios[0];
-        console.log('✅ Usuario autenticado:', user.username, 'Rol:', user.rol);
-
-        // 3. Generar token JWT
         const token = jwt.sign(
-            { 
-                id: user.id, 
-                username: user.username, 
-                rol: user.rol,
-                nombre: user.nombre 
-            },
+            { id: user.id, username: user.username, rol: user.rol, nombre: user.nombre },
             process.env.JWT_SECRET || "clave_secreta",
             { expiresIn: "8h" }
         );
 
-        // 4. Responder con éxito
         res.json({
             message: "Login exitoso",
             token,
-            user: { 
-                id: user.id, 
-                username: user.username, 
-                nombre: user.nombre, 
-                rol: user.rol 
-            }
+            user: { id: user.id, username: user.username, nombre: user.nombre, rol: user.rol }
         });
 
     } catch (error) {
         console.error('❌ Error en login:', error);
-        res.status(500).json({ 
-            message: "Error interno del servidor",
-            error: error.message 
-        });
+        res.status(500).json({ message: "Error interno del servidor", error: error.message });
     }
 });
 
-// ===================== STOCK ROUTER SIMPLIFICADO =====================
+// ===================== STOCK ROUTER COMPLETO =====================
 const stockRouter = express.Router();
 
-// Middleware de permisos
-const checkPermission = (permission) => {
-    return (req, res, next) => {
-        if (req.user.rol === "admin") return next();
-        if (req.user.rol === "vendedor") return next(); // Por ahora permitimos todo
-        res.status(403).json({ message: "Permisos insuficientes" });
-    };
-};
+// OBTENER TODOS LOS PRODUCTOS
+stockRouter.get("/products", verifyToken, async (req, res) => {
+    try {
+        console.log('📦 Obteniendo productos...');
+        const { data: products, error } = await supabase
+            .from('productos')
+            .select(`*, categorias:categoria_id (nombre)`)
+            .order('id', { ascending: false });
 
-// RUTA DE PRUEBA DEL STOCK ROUTER
-stockRouter.get("/test", verifyToken, (req, res) => {
-    res.json({ 
-        message: "✅ Stock router funcionando",
-        user: req.user 
-    });
+        if (error) throw error;
+
+        const formattedProducts = products.map(p => ({
+            ...p,
+            categoria_nombre: p.categorias?.nombre || null,
+        }));
+
+        console.log('✅ Productos obtenidos:', formattedProducts.length);
+        res.json(formattedProducts);
+    } catch (error) {
+        console.error('Error en GET /products:', error);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
 });
+
+// OBTENER PRODUCTO POR SKU (AÑADIDA)
+stockRouter.get("/products/by-sku/:sku", verifyToken, async (req, res) => {
+    const { sku } = req.params;
+    try {
+        const { data: product, error } = await supabase
+            .from('productos')
+            .select(`*, categorias:categoria_id (nombre)`)
+            .eq('sku', sku)
+            .single();
+
+        if (error) {
+            if (error.code === 'PGRST116') return res.status(404).json({ message: "Producto no encontrado" });
+            throw error;
+        }
+
+        const formattedProduct = {
+            ...product,
+            categoria_nombre: product.categorias?.nombre || null,
+        };
+        res.json(formattedProduct);
+    } catch (err) {
+        console.error("Error al obtener producto por SKU:", err);
+        res.status(500).json({ error: "Error de servidor" });
+    }
+});
+
 
 // OBTENER CATEGORÍAS
 stockRouter.get("/categories", verifyToken, async (req, res) => {
     try {
         console.log('📦 Obteniendo categorías...');
-        
-        const { data: categories, error } = await supabase
-            .from('categorias')
-            .select('*')
-            .order('nombre');
-
-        if (error) {
-            console.error('Error al obtener categorías:', error);
-            return res.status(500).json({ error: "Error en base de datos" });
-        }
-
+        const { data: categories, error } = await supabase.from('categorias').select('*').order('nombre');
+        if (error) throw error;
         console.log('✅ Categorías obtenidas:', categories?.length || 0);
         res.json(categories || []);
-        
     } catch (error) {
-        console.error('Error general en categories:', error);
+        console.error('Error en GET /categories:', error);
         res.status(500).json({ error: "Error interno del servidor" });
     }
 });
 
-// OBTENER PRODUCTOS
-stockRouter.get("/products", verifyToken, async (req, res) => {
-    try {
-        console.log('📦 Obteniendo productos...');
-        
-        const { data: products, error } = await supabase
-            .from('productos')
-            .select(`
-                *,
-                categorias (nombre)
-            `)
-            .order('id', { ascending: false });
+// FINALIZAR STOCK (AÑADIDA Y ESENCIAL)
+stockRouter.post("/finalize", verifyToken, async (req, res) => {
+    const { products } = req.body;
 
-        if (error) {
-            console.error('Error al obtener productos:', error);
-            return res.status(500).json({ error: "Error en base de datos" });
+    if (!products || !Array.isArray(products) || products.length === 0) {
+        return res.status(400).json({ message: "No se proporcionaron productos para finalizar." });
+    }
+
+    try {
+        const results = [];
+        for (const product of products) {
+            const { data: existingProduct } = await supabase
+                .from('productos')
+                .select('id, stock')
+                .eq('sku', product.sku)
+                .single();
+
+            if (existingProduct) {
+                const newStock = parseFloat(existingProduct.stock) + parseFloat(product.added_stock);
+                const { data: updated, error } = await supabase
+                    .from('productos')
+                    .update({
+                        name: product.name,
+                        price: product.price,
+                        purchase_price: product.purchase_price,
+                        stock: newStock,
+                        last_updated: new Date(),
+                    })
+                    .eq('id', existingProduct.id).select().single();
+                if(error) throw error;
+                results.push({ sku: product.sku, status: 'updated', data: updated });
+            } else {
+                const { data: created, error } = await supabase
+                    .from('productos')
+                    .insert([{
+                        ...product,
+                        stock: product.added_stock,
+                        user_id: req.user.id,
+                        last_updated: new Date(),
+                    }])
+                    .select().single();
+                if(error) throw error;
+                results.push({ sku: product.sku, status: 'created', data: created });
+            }
         }
-
-        // Formatear respuesta
-        const formattedProducts = products.map(product => ({
-            id: product.id,
-            sku: product.sku,
-            name: product.name,
-            description: product.description,
-            price: product.price,
-            stock: product.stock,
-            stock_unit: product.stock_unit,
-            categoria_id: product.categoria_id,
-            categoria_nombre: product.categorias?.nombre,
-            user_id: product.user_id
-        }));
-
-        console.log('✅ Productos obtenidos:', formattedProducts.length);
-        res.json(formattedProducts);
-        
-    } catch (error) {
-        console.error('Error general en products:', error);
-        res.status(500).json({ error: "Error interno del servidor" });
+        res.status(200).json({ message: "Proceso de stock finalizado.", results });
+    } catch (err) {
+        console.error("Error al finalizar el stock:", err);
+        res.status(500).json({ error: "Error de servidor al finalizar el stock." });
     }
 });
 
-// ===================== RUTAS DE DIAGNÓSTICO =====================
-app.get("/api/test", (req, res) => {
-    res.json({ 
-        message: "✅ API funcionando correctamente",
-        timestamp: new Date().toISOString()
-    });
-});
-
-app.get("/api/health", async (req, res) => {
-    try {
-        // Probar conexión a Supabase
-        const { data, error } = await supabase
-            .from('usuarios')
-            .select('count')
-            .limit(1);
-
-        res.json({ 
-            status: "OK",
-            database: error ? "Error" : "Conectado",
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        res.json({ 
-            status: "OK", 
-            database: "Error",
-            timestamp: new Date().toISOString()
-        });
-    }
-});
 
 // ===================== MONTAJE DE RUTAS =====================
 app.use("/api/stock", stockRouter);
 
-// Ruta raíz
 app.get("/", (req, res) => {
-    res.json({ 
-        message: "🚀 Servidor POS funcionando",
-        endpoints: {
-            test: "/api/test",
-            health: "/api/health",
-            login: "/api/login (POST)",
-            stock: "/api/stock/*"
-        }
-    });
+    res.json({ message: "🚀 Servidor POS funcionando" });
 });
 
-// Manejo de errores
+// Manejo de 404
 app.use((req, res) => {
     res.status(404).json({ error: "Ruta no encontrada" });
 });
@@ -252,10 +223,5 @@ app.use((req, res) => {
 // ===================== INICIAR SERVIDOR =====================
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor ejecutándose en http://localhost:${PORT}`);
-    console.log(`📊 Endpoints disponibles:`);
-    console.log(`   → http://localhost:${PORT}/api/test`);
-    console.log(`   → http://localhost:${PORT}/api/health`);
-    console.log(`   → http://localhost:${PORT}/api/login (POST)`);
-    console.log(`   → http://localhost:${PORT}/api/stock/*`);
+    console.log(`🚀 Servidor ejecutándose en el puerto ${PORT}`);
 });
