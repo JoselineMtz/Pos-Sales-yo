@@ -3,10 +3,8 @@ import jwt from "jsonwebtoken";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-
-// Importa tus routers externos si los tienes. Asegúrate de que existan.
-// import createStockRouter from "./stockRoutes.js";
-// import createSalesRouter from "./sales.js"; 
+import createStockRouter from "./stockRoutes.js";
+import createSalesRouter from "./sales.js"; 
 
 dotenv.config();
 
@@ -73,6 +71,13 @@ const initializeSupabase = async () => {
 };
 
 initializeSupabase();
+
+// Stock router (pasa supabase en lugar de db)
+const stockRouter = createStockRouter(supabase, verificarToken);
+
+// Montar las rutas
+apiRouter.use("/stock", stockRouter);
+
 
 // Función helper que simula 'db.query' pero retorna el cliente Supabase
 const db = {
