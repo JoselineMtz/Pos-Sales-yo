@@ -3,8 +3,8 @@ import jwt from "jsonwebtoken";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-import createStockRouter from "./stockRoutes.js";
-import createSalesRouter from "./sales.js"; 
+import createStockRouter from "./rutes/stockRoutes.js";
+
 
 dotenv.config();
 
